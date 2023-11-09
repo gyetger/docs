@@ -5,6 +5,7 @@
     - [The Local Driver](#the-local-driver)
     - [The Public Disk](#the-public-disk)
     - [Driver Prerequisites](#driver-prerequisites)
+    - [Scoped & Read-Only Filesystems](#scoped-and-read-only-filesystems)
     - [Amazon S3 Compatible Filesystems](#amazon-s3-compatible-filesystems)
 - [Obtaining Disk Instances](#obtaining-disk-instances)
     - [On-Demand Disks](#on-demand-disks)
@@ -13,6 +14,9 @@
     - [File URLs](#file-urls)
     - [File Metadata](#file-metadata)
 - [Storing Files](#storing-files)
+    - [Prepending & Appending To Files](#prepending-appending-to-files)
+    - [Copying & Moving Files](#copying-moving-files)
+    - [Automatic Streaming](#automatic-streaming)
     - [File Uploads](#file-uploads)
     - [File Visibility](#file-visibility)
 - [Deleting Files](#deleting-files)
@@ -31,7 +35,8 @@ Laravel's filesystem configuration file is located at `config/filesystems.php`. 
 
 The `local` driver interacts with files stored locally on the server running the Laravel application while the `s3` driver is used to write to Amazon's S3 cloud storage service.
 
-> {tip} You may configure as many disks as you like and may even have multiple disks that use the same driver.
+> **Note**
+> You may configure as many disks as you like and may even have multiple disks that use the same driver.
 
 <a name="the-local-driver"></a>
 ### The Local Driver
@@ -75,7 +80,7 @@ You may configure additional symbolic links in your `filesystems` configuration 
 Before using the S3 driver, you will need to install the Flysystem S3 package via the Composer package manager:
 
 ```shell
-composer require -W league/flysystem-aws-s3-v3 "^3.0"
+composer require league/flysystem-aws-s3-v3 "^3.0"
 ```
 
 The S3 driver configuration information is located in your `config/filesystems.php` configuration file. This file contains an example configuration array for an S3 driver. You are free to modify this array with your own S3 configuration and credentials. For convenience, these environment variables match the naming convention used by the AWS CLI.
@@ -119,29 +124,80 @@ Laravel's Flysystem integrations work great with SFTP; however, a sample configu
     'sftp' => [
         'driver' => 'sftp',
         'host' => env('SFTP_HOST'),
-        
+
         // Settings for basic authentication...
         'username' => env('SFTP_USERNAME'),
         'password' => env('SFTP_PASSWORD'),
 
         // Settings for SSH key based authentication with encryption password...
         'privateKey' => env('SFTP_PRIVATE_KEY'),
-        'password' => env('SFTP_PASSWORD'),
+        'passphrase' => env('SFTP_PASSPHRASE'),
 
         // Optional SFTP Settings...
+        // 'hostFingerprint' => env('SFTP_HOST_FINGERPRINT'),
+        // 'maxTries' => 4,
+        // 'passphrase' => env('SFTP_PASSPHRASE'),
         // 'port' => env('SFTP_PORT', 22),
         // 'root' => env('SFTP_ROOT', ''),
         // 'timeout' => 30,
+        // 'useAgent' => true,
     ],
+
+<a name="scoped-and-read-only-filesystems"></a>
+### Scoped & Read-Only Filesystems
+
+Scoped disks allow you to define a filesystem where all paths are automatically prefixed with a given path prefix. Before creating a scoped filesystem disk, you will need to install an additional Flysystem package via the Composer package manager:
+
+```shell
+composer require league/flysystem-path-prefixing "^3.0"
+```
+
+You may create a path scoped instance of any existing filesystem disk by defining a disk that utilizes the `scoped` driver. For example, you may create a disk which scopes your existing `s3` disk to a specific path prefix, and then every file operation using your scoped disk will utilize the specified prefix:
+
+```php
+'s3-videos' => [
+    'driver' => 'scoped',
+    'disk' => 's3',
+    'prefix' => 'path/to/videos',
+],
+```
+
+"Read-only" disks allow you to create filesystem disks that do not allow write operations. Before using the `read-only` configuration option, you will need to install an additional Flysystem package via the Composer package manager:
+
+```shell
+composer require league/flysystem-read-only "^3.0"
+```
+
+Next, you may include the `read-only` configuration option in one or more of your disk's configuration arrays:
+
+```php
+'s3-videos' => [
+    'driver' => 's3',
+    // ...
+    'read-only' => true,
+],
+```
 
 <a name="amazon-s3-compatible-filesystems"></a>
 ### Amazon S3 Compatible Filesystems
 
 By default, your application's `filesystems` configuration file contains a disk configuration for the `s3` disk. In addition to using this disk to interact with Amazon S3, you may use it to interact with any S3 compatible file storage service such as [MinIO](https://github.com/minio/minio) or [DigitalOcean Spaces](https://www.digitalocean.com/products/spaces/).
 
-Typically, after updating the disk's credentials to match the credentials of the service you are planning to use, you only need to update the value of the `url` configuration option. This option's value is typically defined via the `AWS_ENDPOINT` environment variable:
+Typically, after updating the disk's credentials to match the credentials of the service you are planning to use, you only need to update the value of the `endpoint` configuration option. This option's value is typically defined via the `AWS_ENDPOINT` environment variable:
 
     'endpoint' => env('AWS_ENDPOINT', 'https://minio:9000'),
+
+<a name="minio"></a>
+#### MinIO
+
+In order for Laravel's Flysystem integration to generate proper URLs when using MinIO, you should define the `AWS_URL` environment variable so that it matches your application's local URL and includes the bucket name in the URL path:
+
+```ini
+AWS_URL=http://localhost:9000/local
+```
+
+> **Warning**  
+> Generating temporary storage URLs via the `temporaryUrl` method is not supported when using MinIO.
 
 <a name="obtaining-disk-instances"></a>
 ## Obtaining Disk Instances
@@ -211,7 +267,8 @@ You may use the `url` method to get the URL for a given file. If you are using t
 
 When using the `local` driver, all files that should be publicly accessible should be placed in the `storage/app/public` directory. Furthermore, you should [create a symbolic link](#the-public-disk) at `public/storage` which points to the `storage/app/public` directory.
 
-> {note} When using the `local` driver, the return value of `url` is not URL encoded. For this reason, we recommend always storing your files using names that will create valid URLs.
+> **Warning**  
+> When using the `local` driver, the return value of `url` is not URL encoded. For this reason, we recommend always storing your files using names that will create valid URLs.
 
 <a name="temporary-urls"></a>
 #### Temporary URLs
@@ -289,6 +346,10 @@ The `lastModified` method returns the UNIX timestamp of the last time the file w
 
     $time = Storage::lastModified('file.jpg');
 
+The MIME type of a given file may be obtained via the `mimeType` method:
+
+    $mime = Storage::mimeType('file.jpg')
+
 <a name="file-paths"></a>
 #### File Paths
 
@@ -309,8 +370,43 @@ The `put` method may be used to store file contents on a disk. You may also pass
 
     Storage::put('file.jpg', $resource);
 
+<a name="failed-writes"></a>
+#### Failed Writes
+
+If the `put` method (or other "write" operations) is unable to write the file to disk, `false` will be returned:
+
+    if (! Storage::put('file.jpg', $contents)) {
+        // The file could not be written to disk...
+    }
+
+If you wish, you may define the `throw` option within your filesystem disk's configuration array. When this option is defined as `true`, "write" methods such as `put` will throw an instance of `League\Flysystem\UnableToWriteFile` when write operations fail:
+
+    'public' => [
+        'driver' => 'local',
+        // ...
+        'throw' => true,
+    ],
+
+<a name="prepending-appending-to-files"></a>
+### Prepending & Appending To Files
+
+The `prepend` and `append` methods allow you to write to the beginning or end of a file:
+
+    Storage::prepend('file.log', 'Prepended Text');
+
+    Storage::append('file.log', 'Appended Text');
+
+<a name="copying-moving-files"></a>
+### Copying & Moving Files
+
+The `copy` method may be used to copy an existing file to a new location on the disk, while the `move` method may be used to rename or move an existing file to a new location:
+
+    Storage::copy('old/file.jpg', 'new/file.jpg');
+
+    Storage::move('old/file.jpg', 'new/file.jpg');
+
 <a name="automatic-streaming"></a>
-#### Automatic Streaming
+### Automatic Streaming
 
 Streaming files to storage offers significantly reduced memory usage. If you would like Laravel to automatically manage streaming a given file to your storage location, you may use the `putFile` or `putFileAs` method. This method accepts either an `Illuminate\Http\File` or `Illuminate\Http\UploadedFile` instance and will automatically stream the file to your desired location:
 
@@ -328,24 +424,6 @@ There are a few important things to note about the `putFile` method. Note that w
 The `putFile` and `putFileAs` methods also accept an argument to specify the "visibility" of the stored file. This is particularly useful if you are storing the file on a cloud disk such as Amazon S3 and would like the file to be publicly accessible via generated URLs:
 
     Storage::putFile('photos', new File('/path/to/photo'), 'public');
-
-<a name="prepending-appending-to-files"></a>
-#### Prepending & Appending To Files
-
-The `prepend` and `append` methods allow you to write to the beginning or end of a file:
-
-    Storage::prepend('file.log', 'Prepended Text');
-
-    Storage::append('file.log', 'Appended Text');
-
-<a name="copying-moving-files"></a>
-#### Copying & Moving Files
-
-The `copy` method may be used to copy an existing file to a new location on the disk, while the `move` method may be used to rename or move an existing file to a new location:
-
-    Storage::copy('old/file.jpg', 'new/file.jpg');
-
-    Storage::move('old/file.jpg', 'new/file.jpg');
 
 <a name="file-uploads"></a>
 ### File Uploads
@@ -396,7 +474,8 @@ You may also use the `putFileAs` method on the `Storage` facade, which will perf
         'avatars', $request->file('avatar'), $request->user()->id
     );
 
-> {note} Unprintable and invalid unicode characters will automatically be removed from file paths. Therefore, you may wish to sanitize your file paths before passing them to Laravel's file storage methods. File paths are normalized using the `League\Flysystem\Util::normalizePath` method.
+> **Warning**  
+> Unprintable and invalid unicode characters will automatically be removed from file paths. Therefore, you may wish to sanitize your file paths before passing them to Laravel's file storage methods. File paths are normalized using the `League\Flysystem\WhitespacePathNormalizer::normalizePath` method.
 
 <a name="specifying-a-disk"></a>
 #### Specifying A Disk
